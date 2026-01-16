@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Calendar, FileText, Pill, MessageSquare, Phone, Mail, AlertCircle, ArrowLeft } from "lucide-react"
+import { Calendar, FileText, Pill, MessageSquare, Phone, Mail, AlertCircle, ArrowLeft, Eye, Download } from "lucide-react"
 import { format } from "date-fns"
 import Link from "next/link"
 
@@ -48,10 +48,18 @@ async function getPatientAppointments(patientId: string, doctorId: string) {
 
 async function getPatientReports(patientId: string) {
   return sql`
-    SELECT id, title, report_type as "reportType", file_url as "fileUrl", report_date as "reportDate"
+    SELECT 
+      id, 
+      title, 
+      description,
+      report_type as "reportType", 
+      file_url as "fileUrl", 
+      file_name as "fileName",
+      report_date as "reportDate",
+      created_at as "createdAt"
     FROM medical_reports
     WHERE patient_id = ${patientId} AND is_shared_with_doctors = true
-    ORDER BY report_date DESC
+    ORDER BY report_date DESC, created_at DESC
     LIMIT 10
   `
 }
@@ -235,18 +243,68 @@ export default async function PatientDetailsPage({ params }: { params: Promise<{
                     {reports.map((report: Record<string, unknown>) => (
                       <div
                         key={report.id as string}
-                        className="flex items-center justify-between p-4 rounded-lg border"
+                        className="flex items-center justify-between p-4 rounded-lg border hover:bg-muted/50 transition-colors"
                       >
-                        <div className="flex items-center gap-3">
-                          <FileText className="h-8 w-8 text-muted-foreground" />
-                          <div>
-                            <p className="font-medium">{report.title as string}</p>
-                            <p className="text-sm text-muted-foreground">
-                              {format(new Date(report.reportDate as string), "MMMM d, yyyy")}
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <FileText className="h-8 w-8 text-muted-foreground flex-shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium truncate">{report.title as string}</p>
+                            {report.description && (
+                              <p className="text-sm text-muted-foreground line-clamp-1 mt-1">
+                                {report.description as string}
+                              </p>
+                            )}
+                            <p className="text-sm text-muted-foreground mt-1">
+                              {format(new Date((report.reportDate || report.createdAt) as string), "MMMM d, yyyy")}
                             </p>
                           </div>
                         </div>
-                        <Badge variant="outline">{(report.reportType as string).replace("_", " ")}</Badge>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <Badge variant="outline" className="capitalize">
+                            {String(report.reportType || "other").replace("_", " ")}
+                          </Badge>
+                          {report.fileUrl && (
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                asChild
+                                className="gap-1"
+                              >
+                                <a
+                                  href={report.fileUrl as string}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => {
+                                    // If it's a local URL, ensure it opens correctly
+                                    const url = report.fileUrl as string
+                                    if (url.startsWith("/uploads/")) {
+                                      e.preventDefault()
+                                      window.open(url, "_blank")
+                                    }
+                                  }}
+                                >
+                                  <Eye className="h-4 w-4" />
+                                  View
+                                </a>
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                asChild
+                                className="gap-1"
+                              >
+                                <a
+                                  href={report.fileUrl as string}
+                                  download={report.fileName as string || report.title as string}
+                                >
+                                  <Download className="h-4 w-4" />
+                                  Download
+                                </a>
+                              </Button>
+                            </>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -290,22 +348,6 @@ export default async function PatientDetailsPage({ params }: { params: Promise<{
             </Card>
           </TabsContent>
         </Tabs>
-
-        {/* Quick Actions */}
-        <div className="flex gap-4">
-          <Link href={`/doctor/messages?patient=${id}`}>
-            <Button variant="outline" className="gap-2 bg-transparent">
-              <MessageSquare className="h-4 w-4" />
-              Send Message
-            </Button>
-          </Link>
-          <Link href={`/doctor/prescriptions/new?patient=${id}`}>
-            <Button className="gap-2">
-              <Pill className="h-4 w-4" />
-              Write Prescription
-            </Button>
-          </Link>
-        </div>
       </div>
     </div>
   )

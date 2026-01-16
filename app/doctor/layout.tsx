@@ -17,7 +17,7 @@ export default async function DoctorLayout({ children }: { children: React.React
   return (
     <div className="min-h-screen bg-muted/30">
       <Sidebar user={user} />
-      <main className="pl-64">{children}</main>
+      <main className="pl-64 pr-6">{children}</main>
     </div>
   )
 }

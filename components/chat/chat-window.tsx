@@ -9,12 +9,27 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Send, ArrowLeft } from "lucide-react"
 import { cn } from "@/lib/utils"
 
-const fetcher = (url: string) => fetch(url).then((res) => res.json())
+const fetcher = async (url: string) => {
+  const res = await fetch(url)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch: ${res.statusText}`)
+  }
+  const data = await res.json()
+  // Handle both array and error object responses
+  if (Array.isArray(data)) {
+    return data
+  }
+  if (data.error) {
+    console.error("API error:", data.error)
+    return []
+  }
+  return []
+}
 
 interface Message {
-  id: number
+  id: string
   content: string
-  sender_id: number
+  sender_id: string
   sender_name: string
   sender_role: string
   is_read: boolean
@@ -33,8 +48,8 @@ export function ChatWindow({ conversationId, otherUserName, currentUserId, onBac
   const [sending, setSending] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  const { data: messages = [], mutate: mutateMessages } = useSWR<Message[]>(
-    `/api/conversations/${conversationId}/messages`,
+  const { data: messages = [], error, mutate: mutateMessages } = useSWR<Message[]>(
+    conversationId ? `/api/conversations/${conversationId}/messages` : null,
     fetcher,
     { refreshInterval: 3000 },
   )
@@ -46,23 +61,33 @@ export function ChatWindow({ conversationId, otherUserName, currentUserId, onBac
   }, [messages])
 
   const handleSend = async () => {
-    if (!message.trim() || sending) return
+    if (!message.trim() || sending || !conversationId) return
 
+    const messageContent = message.trim()
+    setMessage("")
     setSending(true)
+    
     try {
       const res = await fetch(`/api/conversations/${conversationId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: message }),
+        body: JSON.stringify({ content: messageContent }),
       })
 
       if (res.ok) {
         const newMessage = await res.json()
-        mutateMessages([...messages, newMessage], false)
-        setMessage("")
+        // Refresh messages to get the latest from server
+        mutateMessages()
+      } else {
+        const errorData = await res.json()
+        console.error("Send message error:", errorData.error || "Failed to send message")
+        // Restore message on error
+        setMessage(messageContent)
       }
     } catch (error) {
       console.error("Send message error:", error)
+      // Restore message on error
+      setMessage(messageContent)
     } finally {
       setSending(false)
     }
@@ -127,45 +152,58 @@ export function ChatWindow({ conversationId, otherUserName, currentUserId, onBac
 
       <ScrollArea className="flex-1 p-4" ref={scrollRef}>
         <div className="space-y-6">
-          {Object.entries(groupedMessages).map(([date, msgs]) => (
-            <div key={date}>
-              <div className="flex justify-center mb-4">
-                <span className="text-xs text-muted-foreground bg-muted px-3 py-1 rounded-full">{date}</span>
-              </div>
-              <div className="space-y-3">
-                {msgs.map((msg) => {
-                  const isOwn = msg.sender_id === currentUserId
-                  return (
-                    <div key={msg.id} className={cn("flex gap-2", isOwn ? "justify-end" : "justify-start")}>
-                      {!isOwn && (
-                        <Avatar className="h-8 w-8">
-                          <AvatarFallback className="text-xs bg-muted">
-                            {msg.sender_name
-                              .split(" ")
-                              .map((n) => n[0])
-                              .join("")}
-                          </AvatarFallback>
-                        </Avatar>
-                      )}
-                      <div
-                        className={cn(
-                          "max-w-[70%] rounded-2xl px-4 py-2",
-                          isOwn ? "bg-primary text-primary-foreground" : "bg-muted",
-                        )}
-                      >
-                        <p className="text-sm">{msg.content}</p>
-                        <p
-                          className={cn("text-xs mt-1", isOwn ? "text-primary-foreground/70" : "text-muted-foreground")}
-                        >
-                          {formatTime(msg.created_at)}
-                        </p>
-                      </div>
-                    </div>
-                  )
-                })}
+          {error ? (
+            <div className="flex items-center justify-center h-full text-muted-foreground">
+              <p>Error loading messages. Please try again.</p>
+            </div>
+          ) : Object.keys(groupedMessages).length === 0 ? (
+            <div className="flex items-center justify-center h-full text-muted-foreground">
+              <div className="text-center">
+                <p className="text-sm">No messages yet</p>
+                <p className="text-xs mt-1">Start the conversation!</p>
               </div>
             </div>
-          ))}
+          ) : (
+            Object.entries(groupedMessages).map(([date, msgs]) => (
+              <div key={date}>
+                <div className="flex justify-center mb-4">
+                  <span className="text-xs text-muted-foreground bg-muted px-3 py-1 rounded-full">{date}</span>
+                </div>
+                <div className="space-y-3">
+                  {msgs.map((msg) => {
+                    const isOwn = String(msg.sender_id) === String(currentUserId)
+                    return (
+                      <div key={msg.id} className={cn("flex gap-2", isOwn ? "justify-end" : "justify-start")}>
+                        {!isOwn && (
+                          <Avatar className="h-8 w-8">
+                            <AvatarFallback className="text-xs bg-muted">
+                              {msg.sender_name
+                                .split(" ")
+                                .map((n) => n[0])
+                                .join("")}
+                            </AvatarFallback>
+                          </Avatar>
+                        )}
+                        <div
+                          className={cn(
+                            "max-w-[70%] rounded-2xl px-4 py-2",
+                            isOwn ? "bg-primary text-primary-foreground" : "bg-muted",
+                          )}
+                        >
+                          <p className="text-sm">{msg.content}</p>
+                          <p
+                            className={cn("text-xs mt-1", isOwn ? "text-primary-foreground/70" : "text-muted-foreground")}
+                          >
+                            {formatTime(msg.created_at)}
+                          </p>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </ScrollArea>
 

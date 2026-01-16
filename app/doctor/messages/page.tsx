@@ -22,10 +22,11 @@ const fetcher = async (url: string) => {
 }
 
 interface Conversation {
-  id: string
+  id: string | null
   other_user_id: string
   other_user_name: string
   other_user_role: string
+  specialization: string | null
   last_message: string | null
   last_message_at: string | null
   unread_count: number
@@ -42,8 +43,9 @@ interface User {
 export default function DoctorMessagesPage() {
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null)
   const [currentUser, setCurrentUser] = useState<User | null>(null)
+  const [creatingConversation, setCreatingConversation] = useState(false)
 
-  const { data: conversations = [] } = useSWR<Conversation[]>("/api/conversations", fetcher, {
+  const { data: conversations = [], mutate: mutateConversations } = useSWR<Conversation[]>("/api/conversations", fetcher, {
     refreshInterval: 10000,
   })
 
@@ -75,6 +77,53 @@ export default function DoctorMessagesPage() {
     return d.toLocaleDateString("en-US", { month: "short", day: "numeric" })
   }
 
+  const handleSelectConversation = async (conv: Conversation) => {
+    // If conversation doesn't exist (id is null), create it first
+    if (!conv.id && conv.other_user_id) {
+      setCreatingConversation(true)
+      try {
+        const res = await fetch("/api/conversations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ patientId: conv.other_user_id }),
+        })
+        
+        if (res.ok) {
+          const newConversation = await res.json()
+          if (newConversation && newConversation.id) {
+            // Update the conversation with the new id
+            const updatedConv = { ...conv, id: newConversation.id }
+            setSelectedConversation(updatedConv)
+            // Refresh conversations list
+            mutateConversations()
+          } else {
+            console.error("Invalid conversation response:", newConversation)
+            alert("Failed to create conversation. Please try again.")
+          }
+        } else {
+          let errorData
+          try {
+            errorData = await res.json()
+          } catch (jsonError) {
+            errorData = { error: `HTTP ${res.status}: ${res.statusText}` }
+          }
+          console.error("Failed to create conversation - Status:", res.status)
+          console.error("Failed to create conversation - Response:", errorData)
+          alert(`Failed to create conversation: ${errorData.error || "Unknown error"}`)
+        }
+      } catch (error) {
+        console.error("Error creating conversation:", error)
+        const errorMessage = error instanceof Error ? error.message : "Unknown error occurred"
+        console.error("Full error details:", error)
+        alert(`An error occurred while creating the conversation: ${errorMessage}. Please try again.`)
+      } finally {
+        setCreatingConversation(false)
+      }
+    } else {
+      setSelectedConversation(conv)
+    }
+  }
+
   return (
     <div className="h-[calc(100vh-8rem)]">
       <div className="flex h-full gap-4">
@@ -94,13 +143,15 @@ export default function DoctorMessagesPage() {
                   <p className="text-sm">Messages from patients will appear here</p>
                 </div>
               ) : (
-                conversations.map((conv) => (
+                conversations.map((conv, index) => (
                   <button
-                    key={conv.id}
-                    onClick={() => setSelectedConversation(conv)}
+                    key={conv.id || `contact-${conv.other_user_id}-${index}`}
+                    onClick={() => handleSelectConversation(conv)}
+                    disabled={creatingConversation}
                     className={cn(
                       "w-full flex items-center gap-3 p-4 hover:bg-muted/50 transition-colors text-left border-b",
                       selectedConversation?.id === conv.id && "bg-muted",
+                      creatingConversation && "opacity-50 cursor-not-allowed",
                     )}
                   >
                     <Avatar>
@@ -116,9 +167,16 @@ export default function DoctorMessagesPage() {
                         <p className="font-medium truncate">{conv.other_user_name}</p>
                         <span className="text-xs text-muted-foreground">{formatTime(conv.last_message_at)}</span>
                       </div>
-                      <p className="text-sm text-muted-foreground truncate">{conv.last_message || "No messages yet"}</p>
+                      <p className="text-sm text-muted-foreground truncate">
+                        {conv.last_message || (conv.id ? "No messages yet" : "Start conversation")}
+                      </p>
                     </div>
                     {conv.unread_count > 0 && <Badge className="ml-2">{conv.unread_count}</Badge>}
+                    {!conv.id && (
+                      <Badge variant="outline" className="ml-2 text-xs">
+                        New
+                      </Badge>
+                    )}
                   </button>
                 ))
               )}
@@ -126,16 +184,22 @@ export default function DoctorMessagesPage() {
           </CardContent>
         </Card>
 
-        <Card className={cn("flex-1", !selectedConversation && "hidden md:flex")}>
-          {selectedConversation && currentUser ? (
+        <Card className={cn("flex-1 flex flex-col h-full p-0 overflow-hidden", !selectedConversation && "hidden md:flex")}>
+          {selectedConversation && currentUser && selectedConversation.id ? (
             <ChatWindow
               conversationId={selectedConversation.id}
               otherUserName={selectedConversation.other_user_name}
               currentUserId={currentUser.id}
               onBack={() => setSelectedConversation(null)}
             />
+          ) : creatingConversation ? (
+            <div className="flex-1 flex items-center justify-center text-muted-foreground p-6">
+              <div className="text-center">
+                <p>Creating conversation...</p>
+              </div>
+            </div>
           ) : (
-            <div className="flex-1 flex items-center justify-center text-muted-foreground">
+            <div className="flex-1 flex items-center justify-center text-muted-foreground p-6">
               <div className="text-center">
                 <MessageSquare className="h-16 w-16 mx-auto mb-4 opacity-20" />
                 <p>Select a conversation to start messaging</p>

@@ -89,7 +89,7 @@ export default async function DoctorDashboard() {
 
       <div className="p-6 space-y-6">
         {/* Stats Grid */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <StatsCard
             title="Today's Appointments"
             value={stats.todayAppointments}
@@ -101,11 +101,6 @@ export default async function DoctorDashboard() {
             value={stats.pendingAppointments}
             icon={<Clock className="h-6 w-6" />}
             className={stats.pendingAppointments > 0 ? "border-warning" : ""}
-          />
-          <StatsCard
-            title="Monthly Earnings"
-            value={`₹${stats.monthlyEarnings.toFixed(0)}`}
-            icon={<DollarSign className="h-6 w-6" />}
           />
           <StatsCard
             title="Unread Messages"

@@ -30,7 +30,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import { FileText, Upload, Trash2, Download, Eye, Share2, Loader2 } from "lucide-react"
+import { FileText, Upload, Trash2, Download, Eye, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
 const fetcher = async (url: string) => {
@@ -47,19 +47,20 @@ const fetcher = async (url: string) => {
 }
 
 interface Report {
-  id: number
+  id: string
   title: string
   description: string | null
   file_url: string
+  file_name?: string
   file_type: string
   uploaded_at: string
-  shared_with_doctor_id: number | null
+  shared_with_doctor_id: string | null
   doctor_name: string | null
   specialization: string | null
 }
 
 interface Doctor {
-  id: number
+  id: string
   firstName: string
   lastName: string
   specialization: string
@@ -75,7 +76,14 @@ export default function PatientReportsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const { data: reports = [], mutate: mutateReports } = useSWR<Report[]>("/api/medical-reports", fetcher)
-  const { data: doctors = [] } = useSWR<Doctor[]>("/api/doctors", fetcher)
+  const { data: doctorsData } = useSWR<any>("/api/doctors", fetcher)
+  
+  // Handle doctors API response format
+  const doctors: Doctor[] = doctorsData?.success && Array.isArray(doctorsData.data) 
+    ? doctorsData.data 
+    : Array.isArray(doctorsData) 
+      ? doctorsData 
+      : []
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -143,7 +151,7 @@ export default function PatientReportsPage() {
     }
   }
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (id: string) => {
     try {
       const res = await fetch(`/api/medical-reports/${id}`, { method: "DELETE" })
       if (res.ok) {
@@ -221,11 +229,15 @@ export default function PatientReportsPage() {
                     <SelectValue placeholder="Select a doctor" />
                   </SelectTrigger>
                   <SelectContent>
-                    {doctors.map((doctor) => (
-                      <SelectItem key={doctor.id} value={doctor.id.toString()}>
-                        Dr. {doctor.firstName} {doctor.lastName} - {doctor.specialization}
-                      </SelectItem>
-                    ))}
+                    {doctors.length === 0 ? (
+                      <div className="p-2 text-sm text-muted-foreground">No doctors found</div>
+                    ) : (
+                      doctors.map((doctor) => (
+                        <SelectItem key={doctor.id} value={doctor.id}>
+                          Dr. {doctor.firstName} {doctor.lastName} - {doctor.specialization}
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
               </div>
@@ -311,15 +323,6 @@ export default function PatientReportsPage() {
               <CardContent className="space-y-3">
                 {report.description && (
                   <p className="text-sm text-muted-foreground line-clamp-2">{report.description}</p>
-                )}
-
-                {report.shared_with_doctor_id && (
-                  <div className="flex items-center gap-2 text-sm">
-                    <Share2 className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-muted-foreground">
-                      Shared with Dr. {report.doctor_name} ({report.specialization})
-                    </span>
-                  </div>
                 )}
 
                 <div className="flex items-center gap-2 pt-2">

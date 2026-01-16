@@ -71,7 +71,7 @@ export function Sidebar({ user }: SidebarProps) {
   return (
     <aside className="fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r bg-card">
       {/* Logo */}
-      <div className="flex h-16 items-center gap-2 border-b px-6">
+      <div className="flex h-16 items-center gap-2 border-b px-6 py-4">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
           <Heart className="h-4 w-4 text-primary-foreground" />
         </div>
@@ -79,7 +79,7 @@ export function Sidebar({ user }: SidebarProps) {
       </div>
 
       {/* User Info */}
-      <div className="border-b p-4">
+      <div className="border-b p-6">
         <div className="flex items-center gap-3">
           <Avatar>
             <AvatarImage src={user.avatarUrl || undefined} alt={user.firstName} />
@@ -95,7 +95,7 @@ export function Sidebar({ user }: SidebarProps) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 space-y-1 overflow-y-auto p-4">
+      <nav className="flex-1 space-y-1 overflow-y-auto p-6">
         {navItems.map((item) => {
           const Icon = item.icon
           const isActive = pathname === item.href
@@ -118,7 +118,7 @@ export function Sidebar({ user }: SidebarProps) {
       </nav>
 
       {/* Logout */}
-      <div className="border-t p-4">
+      <div className="border-t p-6">
         <Button variant="ghost" className="w-full justify-start gap-3 text-muted-foreground" onClick={handleLogout}>
           <LogOut className="h-4 w-4" />
           Sign out

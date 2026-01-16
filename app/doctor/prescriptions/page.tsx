@@ -22,7 +22,34 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { FileText, Plus, Pill, Calendar, Trash2, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
-const fetcher = (url: string) => fetch(url).then((res) => res.json())
+const fetcher = async (url: string) => {
+  try {
+    const res = await fetch(url)
+    if (!res.ok) {
+      console.error(`API error for ${url}:`, res.status, res.statusText)
+      return []
+    }
+    const data = await res.json()
+    // Handle both array and error object responses
+    if (Array.isArray(data)) {
+      console.log(`Fetched ${data.length} items from ${url}`)
+      return data
+    }
+    if (data.error) {
+      console.error("API error:", data.error)
+      return []
+    }
+    // If data is wrapped in a success/data structure
+    if (data.success && Array.isArray(data.data)) {
+      return data.data
+    }
+    console.warn(`Unexpected data format from ${url}:`, data)
+    return []
+  } catch (error) {
+    console.error(`Fetch error for ${url}:`, error)
+    return []
+  }
+}
 
 interface Medication {
   name: string
@@ -32,8 +59,8 @@ interface Medication {
 }
 
 interface Prescription {
-  id: number
-  medications: Medication[]
+  id: string
+  medications: Medication[] | null
   diagnosis: string
   notes: string | null
   valid_until: string | null
@@ -42,9 +69,10 @@ interface Prescription {
 }
 
 interface Patient {
-  id: number
-  user_id: number
+  id: string
+  user_id: string
   name: string
+  email?: string
 }
 
 export default function DoctorPrescriptionsPage() {
@@ -56,11 +84,28 @@ export default function DoctorPrescriptionsPage() {
   const [validUntil, setValidUntil] = useState("")
   const [medications, setMedications] = useState<Medication[]>([{ name: "", dosage: "", frequency: "", duration: "" }])
 
-  const { data: prescriptions = [], mutate: mutatePrescriptions } = useSWR<Prescription[]>(
+  const { data: prescriptionsData, mutate: mutatePrescriptions } = useSWR<any>(
     "/api/prescriptions",
     fetcher,
   )
-  const { data: patients = [] } = useSWR<Patient[]>("/api/doctor/patients", fetcher)
+  const { data: patientsData, error: patientsError } = useSWR<Patient[]>(
+    "/api/doctor/patients",
+    fetcher,
+  )
+
+  // Ensure patients is always an array
+  const patients: Patient[] = Array.isArray(patientsData) ? patientsData : []
+  
+  // Log for debugging
+  if (patientsError) {
+    console.error("Error fetching patients:", patientsError)
+  }
+  if (patients.length === 0 && patientsData !== undefined) {
+    console.warn("No patients found. Patients data:", patientsData)
+  }
+
+  // Ensure prescriptions is always an array
+  const prescriptions: Prescription[] = Array.isArray(prescriptionsData) ? prescriptionsData : []
 
   const addMedication = () => {
     setMedications([...medications, { name: "", dosage: "", frequency: "", duration: "" }])
@@ -88,7 +133,7 @@ export default function DoctorPrescriptionsPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          patientId: Number.parseInt(selectedPatient),
+          patientId: selectedPatient,
           medications,
           diagnosis,
           notes: notes || null,
@@ -130,8 +175,12 @@ export default function DoctorPrescriptionsPage() {
     return new Date(validUntil) < new Date()
   }
 
-  const activePrescriptions = prescriptions.filter((p) => !isExpired(p.valid_until))
-  const expiredPrescriptions = prescriptions.filter((p) => isExpired(p.valid_until))
+  const activePrescriptions = Array.isArray(prescriptions) 
+    ? prescriptions.filter((p) => !isExpired(p.valid_until))
+    : []
+  const expiredPrescriptions = Array.isArray(prescriptions)
+    ? prescriptions.filter((p) => isExpired(p.valid_until))
+    : []
 
   return (
     <div className="space-y-6">
@@ -163,11 +212,19 @@ export default function DoctorPrescriptionsPage() {
                       <SelectValue placeholder="Select patient" />
                     </SelectTrigger>
                     <SelectContent>
-                      {patients.map((patient) => (
-                        <SelectItem key={patient.id} value={patient.id.toString()}>
-                          {patient.name}
-                        </SelectItem>
-                      ))}
+                      {patientsError ? (
+                        <div className="p-2 text-sm text-destructive">Error loading patients</div>
+                      ) : patients.length === 0 ? (
+                        <div className="p-2 text-sm text-muted-foreground">
+                          No patients found. Patients with appointments will appear here.
+                        </div>
+                      ) : (
+                        patients.map((patient) => (
+                          <SelectItem key={patient.id} value={patient.id}>
+                            {patient.name}
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectContent>
                   </Select>
                 </div>
@@ -354,19 +411,23 @@ function PrescriptionCard({ prescription, expired }: { prescription: Prescriptio
         <div>
           <p className="text-sm font-medium text-muted-foreground mb-2">Medications</p>
           <div className="space-y-2">
-            {prescription.medications.map((med, index) => (
-              <div key={index} className="flex items-start gap-2 text-sm">
-                <Pill className="h-4 w-4 text-primary mt-0.5" />
-                <div>
-                  <p className="font-medium">
-                    {med.name} - {med.dosage}
-                  </p>
-                  <p className="text-muted-foreground">
-                    {med.frequency} for {med.duration}
-                  </p>
+            {prescription.medications && Array.isArray(prescription.medications) && prescription.medications.length > 0 ? (
+              prescription.medications.map((med: Medication, index: number) => (
+                <div key={index} className="flex items-start gap-2 text-sm">
+                  <Pill className="h-4 w-4 text-primary mt-0.5" />
+                  <div>
+                    <p className="font-medium">
+                      {med.name} - {med.dosage}
+                    </p>
+                    <p className="text-muted-foreground">
+                      {med.frequency} {med.duration ? `for ${med.duration}` : ""}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">No medications listed</p>
+            )}
           </div>
         </div>
 

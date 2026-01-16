@@ -1,42 +1,40 @@
 import { NextResponse } from "next/server"
 import { sql } from "@/lib/db"
-import { verifyToken } from "@/lib/auth"
-import { cookies } from "next/headers"
+import { getCurrentUser } from "@/lib/auth"
 
 export async function GET() {
   try {
-    const cookieStore = await cookies()
-    const token = cookieStore.get("token")?.value
-    if (!token) {
+    const user = await getCurrentUser()
+    if (!user || user.role !== "doctor") {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const payload = await verifyToken(token)
-    if (!payload || payload.role !== "doctor") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
-
-    const doctorProfile = await sql`
-      SELECT id FROM doctor_profiles WHERE user_id = ${payload.userId}
-    `
+    console.log("Fetching patients for doctor:", user.id)
 
     // Get patients who have booked appointments with this doctor
+    // Include all appointment statuses except cancelled
     const patients = await sql`
-      SELECT DISTINCT 
-        pp.id,
-        pp.user_id,
-        u.name,
+      SELECT DISTINCT ON (u.id)
+        u.id,
+        u.id as user_id,
+        CONCAT(u.first_name, ' ', u.last_name) as name,
         u.email,
         pp.date_of_birth,
         pp.blood_type
-      FROM patient_profiles pp
-      JOIN users u ON pp.user_id = u.id
-      JOIN appointments a ON a.patient_id = pp.id
-      WHERE a.doctor_id = ${doctorProfile[0]?.id}
-      ORDER BY u.name ASC
+      FROM users u
+      JOIN appointments a ON a.patient_id = u.id
+      LEFT JOIN patient_profiles pp ON u.id = pp.user_id
+      WHERE a.doctor_id = ${user.id}
+        AND u.role = 'patient'
+        AND a.status != 'cancelled'
+      ORDER BY u.id, a.scheduled_at DESC
     `
 
-    return NextResponse.json(patients)
+    console.log(`Found ${patients?.length || 0} patients for doctor ${user.id}`)
+    
+    // Ensure we return an array
+    const result = Array.isArray(patients) ? patients : []
+    return NextResponse.json(result)
   } catch (error) {
     console.error("Get patients error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })

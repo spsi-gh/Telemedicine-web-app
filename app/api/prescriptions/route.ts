@@ -1,66 +1,73 @@
 import { NextResponse } from "next/server"
 import { sql } from "@/lib/db"
-import { verifyToken } from "@/lib/auth"
-import { cookies } from "next/headers"
+import { getCurrentUser } from "@/lib/auth"
 
 export async function GET(request: Request) {
   try {
-    const cookieStore = await cookies()
-    const token = cookieStore.get("token")?.value
-    if (!token) {
+    const user = await getCurrentUser()
+    if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
-
-    const payload = await verifyToken(token)
-    if (!payload) {
-      return NextResponse.json({ error: "Invalid token" }, { status: 401 })
     }
 
     const { searchParams } = new URL(request.url)
     const patientId = searchParams.get("patientId")
 
-    let prescriptions
+    let prescriptions: any[] = []
 
-    if (payload.role === "patient") {
-      const patientProfile = await sql`
-        SELECT id FROM patient_profiles WHERE user_id = ${payload.userId}
-      `
+    if (user.role === "patient") {
       prescriptions = await sql`
         SELECT 
           p.id,
-          p.medications,
           p.diagnosis,
           p.notes,
           p.valid_until,
           p.created_at,
-          u.name as doctor_name,
-          dp.specialization
+          CONCAT(du.first_name, ' ', du.last_name) as doctor_name,
+          dp.specialization,
+          (
+            SELECT json_agg(
+              json_build_object(
+                'name', pi.medication_name,
+                'dosage', pi.dosage,
+                'frequency', pi.frequency,
+                'duration', pi.duration
+              )
+            )
+            FROM prescription_items pi
+            WHERE pi.prescription_id = p.id
+          ) as medications
         FROM prescriptions p
-        JOIN doctor_profiles dp ON p.doctor_id = dp.id
-        JOIN users u ON dp.user_id = u.id
-        WHERE p.patient_id = ${patientProfile[0]?.id}
+        JOIN users du ON p.doctor_id = du.id
+        LEFT JOIN doctor_profiles dp ON p.doctor_id = dp.user_id
+        WHERE p.patient_id = ${user.id}
         ORDER BY p.created_at DESC
       `
-    } else if (payload.role === "doctor") {
-      const doctorProfile = await sql`
-        SELECT id FROM doctor_profiles WHERE user_id = ${payload.userId}
-      `
-
+    } else if (user.role === "doctor") {
       if (patientId) {
         // Get prescriptions for specific patient
         prescriptions = await sql`
           SELECT 
             p.id,
-            p.medications,
             p.diagnosis,
             p.notes,
             p.valid_until,
             p.created_at,
-            pu.name as patient_name
+            CONCAT(pu.first_name, ' ', pu.last_name) as patient_name,
+            (
+              SELECT json_agg(
+                json_build_object(
+                  'name', pi.medication_name,
+                  'dosage', pi.dosage,
+                  'frequency', pi.frequency,
+                  'duration', pi.duration
+                )
+              )
+              FROM prescription_items pi
+              WHERE pi.prescription_id = p.id
+            ) as medications
           FROM prescriptions p
-          JOIN patient_profiles pp ON p.patient_id = pp.id
-          JOIN users pu ON pp.user_id = pu.id
-          WHERE p.doctor_id = ${doctorProfile[0]?.id}
+          JOIN users pu ON p.patient_id = pu.id
+          WHERE p.doctor_id = ${user.id}
           AND p.patient_id = ${patientId}
           ORDER BY p.created_at DESC
         `
@@ -69,16 +76,26 @@ export async function GET(request: Request) {
         prescriptions = await sql`
           SELECT 
             p.id,
-            p.medications,
             p.diagnosis,
             p.notes,
             p.valid_until,
             p.created_at,
-            pu.name as patient_name
+            CONCAT(pu.first_name, ' ', pu.last_name) as patient_name,
+            (
+              SELECT json_agg(
+                json_build_object(
+                  'name', pi.medication_name,
+                  'dosage', pi.dosage,
+                  'frequency', pi.frequency,
+                  'duration', pi.duration
+                )
+              )
+              FROM prescription_items pi
+              WHERE pi.prescription_id = p.id
+            ) as medications
           FROM prescriptions p
-          JOIN patient_profiles pp ON p.patient_id = pp.id
-          JOIN users pu ON pp.user_id = pu.id
-          WHERE p.doctor_id = ${doctorProfile[0]?.id}
+          JOIN users pu ON p.patient_id = pu.id
+          WHERE p.doctor_id = ${user.id}
           ORDER BY p.created_at DESC
         `
       }
@@ -86,7 +103,13 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Invalid role" }, { status: 403 })
     }
 
-    return NextResponse.json(prescriptions)
+    // Ensure medications is always an array
+    const formattedPrescriptions = prescriptions.map((p) => ({
+      ...p,
+      medications: p.medications || [],
+    }))
+
+    return NextResponse.json(formattedPrescriptions)
   } catch (error) {
     console.error("Get prescriptions error:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
@@ -95,43 +118,65 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const cookieStore = await cookies()
-    const token = cookieStore.get("token")?.value
-    if (!token) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
-
-    const payload = await verifyToken(token)
-    if (!payload || payload.role !== "doctor") {
+    const user = await getCurrentUser()
+    if (!user || user.role !== "doctor") {
       return NextResponse.json({ error: "Only doctors can create prescriptions" }, { status: 403 })
     }
 
-    const { patientId, medications, diagnosis, notes, validUntil } = await request.json()
+    const body = await request.json()
+    const { patientId, medications, diagnosis, notes, validUntil, appointmentId } = body
 
-    const doctorProfile = await sql`
-      SELECT id FROM doctor_profiles WHERE user_id = ${payload.userId}
-    `
+    if (!patientId || !diagnosis || !medications || !Array.isArray(medications) || medications.length === 0) {
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
+    }
 
+    // Validate medications
+    for (const med of medications) {
+      if (!med.name || !med.dosage) {
+        return NextResponse.json({ error: "All medications must have name and dosage" }, { status: 400 })
+      }
+    }
+
+    // Create prescription
     const prescription = await sql`
-      INSERT INTO prescriptions (patient_id, doctor_id, medications, diagnosis, notes, valid_until)
-      VALUES (${patientId}, ${doctorProfile[0]?.id}, ${JSON.stringify(medications)}, ${diagnosis}, ${notes || null}, ${validUntil || null})
-      RETURNING id, medications, diagnosis, notes, valid_until, created_at
+      INSERT INTO prescriptions (patient_id, doctor_id, appointment_id, diagnosis, notes, valid_until)
+      VALUES (${patientId}, ${user.id}, ${appointmentId || null}, ${diagnosis}, ${notes || null}, ${validUntil || null})
+      RETURNING id, diagnosis, notes, valid_until, created_at
     `
 
-    // Create notification for patient
-    const patientUser = await sql`
-      SELECT user_id FROM patient_profiles WHERE id = ${patientId}
-    `
-    if (patientUser[0]) {
+    if (!prescription || prescription.length === 0) {
+      return NextResponse.json({ error: "Failed to create prescription" }, { status: 500 })
+    }
+
+    const prescriptionId = prescription[0].id
+
+    // Insert prescription items (medications)
+    for (const med of medications) {
       await sql`
-        INSERT INTO notifications (user_id, type, title, message, related_id, related_type)
-        VALUES (${patientUser[0].user_id}, 'prescription', 'New Prescription', ${`Dr. ${payload.name} has issued a new prescription for you`}, ${prescription[0].id}, 'prescription')
+        INSERT INTO prescription_items (prescription_id, medication_name, dosage, frequency, duration, instructions)
+        VALUES (${prescriptionId}, ${med.name}, ${med.dosage || null}, ${med.frequency || null}, ${med.duration || null}, ${med.instructions || null})
       `
     }
 
-    return NextResponse.json(prescription[0])
+    // Create notification for patient
+    try {
+      await sql`
+        INSERT INTO notifications (user_id, title, message, type, action_url)
+        VALUES (${patientId}, 'New Prescription', ${`Dr. ${user.firstName} ${user.lastName} has issued a new prescription for you`}, 'prescription', '/patient/prescriptions')
+      `
+    } catch (notifError) {
+      // Don't fail prescription creation if notification fails
+      console.error("Notification creation error:", notifError)
+    }
+
+    return NextResponse.json({
+      ...prescription[0],
+      medications: medications,
+    })
   } catch (error) {
     console.error("Create prescription error:", error)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+    return NextResponse.json({ 
+      error: error instanceof Error ? error.message : "Internal server error" 
+    }, { status: 500 })
   }
 }
